@@ -289,7 +289,6 @@ class Decomposition(tuple):
     def convert_index_global(self, *args, rel=True):
         """
         Convert a local index into a global index.
-
         Parameters
         ----------
         *args
@@ -301,12 +300,10 @@ class Decomposition(tuple):
             * slice(a, b, c).
         rel : bool, optional
             If False, convert into an absolute, instead of a relative, local index.
-
         Raises
         ------
         TypeError
             If the input doesn't adhere to any of the supported format.
-
         Examples
         --------
         In the following example...
@@ -320,7 +317,7 @@ class Decomposition(tuple):
                 # convert_index(index)
                 # -> Check the index is in range
                 if loc_idx < 0 or loc_idx > rank_length:
-                    raise ValueError("loc_idx out of range")
+                    return slice(-1, -2, 1)
                 # -> Do the actual conversion
                 else:
                     return loc_idx + self.loc_abs_min
@@ -334,17 +331,17 @@ class Decomposition(tuple):
                     shifted = []
                     for i in loc_idx:
                         if i < 0 or i > rank_length:
-                            raise ValueError("loc_idx out of range")
+                            return slice(-1, -2, 1)
                         else:
                             shifted.append(i + self.loc_abs_min)
                         return as_tuple(shifted)
                 elif isinstance(loc_idx, slice):
                     if loc_idx.start is not None \
                             and loc_idx.start < 0 or loc_idx.start > rank_length:
-                        raise ValueError("loc_idx out of range")
+                        return slice(-1, -2, 1)
                     if loc_idx.start is not None \
-                            and loc_idx.stop < 0 or loc_idx.stop > rank_length:
-                        raise ValueError("loc_idx out of range")
+                            and loc_idx.stop < 0 or loc_idx.stop > rank_length + 1:
+                        return slice(-1, -2, 1)
                     if loc_idx.step >= 0 or loc_idx.step is None:
                         if loc_idx.start is None:
                             glb_start = self.loc_abs_min

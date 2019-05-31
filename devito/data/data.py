@@ -131,6 +131,22 @@ class Data(np.ndarray):
         ret._decomposition = decomposition
         ret._is_distributed = any(i is not None for i in decomposition)
         return ret
+    
+    def _set_data(self, data, sl1, sl2):
+        data_local = data[sl2]
+        data_loc_idx = self._convert_index(sl2)
+        data_global_idx = []
+        for i in range(len(data_loc_idx)):
+            data_global_idx.append(self._decomposition[i].convert_index_global(data_loc_idx[i]))
+        # work out bits of sl1 data_global_idx correspond to
+        norms = []
+        for i, j in zip(sl1, sl2):
+            norms.append(i.start-j.start)
+        mapped_idx = []
+        for i, j in zip(data_global_idx, norms):
+            mapped_idx.append(slice(i.start+j, i.stop+j, i.step))
+        #from IPython import embed; embed()
+        return data_local, as_tuple(mapped_idx)
 
     @property
     def _is_mpi_distributed(self):
@@ -168,6 +184,8 @@ class Data(np.ndarray):
                 # `val` is decomposed, `self` is decomposed -> local set
                 super(Data, self).__setitem__(glb_idx, val)
             else:
+                #print("We be here?")
+                #from IPython import embed; embed()
                 # `val` is decomposed, `self` is replicated -> gatherall-like
                 raise NotImplementedError
         elif isinstance(val, np.ndarray):
@@ -200,6 +218,7 @@ class Data(np.ndarray):
                                           "via scalars or numpy arrays")
             super(Data, self).__setitem__(glb_idx, val)
         else:
+            #from IPython import embed; embed()
             raise ValueError("Cannot insert obj of type `%s` into a Data" % type(val))
 
     def _normalize_index(self, idx):
@@ -363,7 +382,7 @@ def index_dist_to_repl(idx, decomposition):
     elif isinstance(idx, np.ndarray):
         return idx - value
     elif isinstance(idx, slice):
-        if idx.step < 0:
+        if idx.step is not None and idx.step < 0:
             if idx.stop is None:
                 return slice(idx.start - value, None, idx.step)
         return slice(idx.start - value, idx.stop - value, idx.step)
