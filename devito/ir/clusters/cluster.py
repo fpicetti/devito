@@ -41,7 +41,7 @@ class Cluster(object):
         self._guards = frozendict(guards or {})
 
     def __repr__(self):
-        return "Cluster([%s])" % ','.join('%s' % i for i in self.exprs)
+        return "Cluster([%s])" % ('\n' + ' '*9).join('%s' % i for i in self.exprs)
 
     @classmethod
     def from_clusters(cls, *clusters):
