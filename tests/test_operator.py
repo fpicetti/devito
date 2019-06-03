@@ -1233,6 +1233,11 @@ class TestLoopScheduler(object):
           'Eq(tu[t-1,x,y,z], tu[t,x+3,y,z] + tv[t,x,y,z])',
           'Eq(tw[t-1,x,y,z], tu[t,x,y+1,z] + ti0[x,y-1,z])'),
          '+++-+++', ['xyz', 'txyz'], 'xyztxyz'),
+        # War 2->1; expected=2
+        # Here the difference is that we're using SubDimensions
+        (('Eq(tv[t,xi,yi,zi], tu[t,xi-1,yi,zi] + tu[t,xi+1,yi,zi])',
+          'Eq(tu[t+1,xi,yi,zi], tu[t,xi,yi,zi] + tv[t,xi-1,yi,zi] + tv[t,xi+1,yi,zi])'),
+         '+++++++', ['txiyizi', 'txiyizi'], 'txiyizixiyizi'),
     ])
     def test_consistency_anti_dependences(self, exprs, directions, expected, visit):
         """
