@@ -151,7 +151,7 @@ class TestVectorDistanceArithmetic(object):
 
         # Equality check
         assert tcxy_w0 == tcxy_w0
-        assert (tcxy_w0 != tcxy_r0) is False
+        assert (tcxy_w0 != tcxy_r0) is True  # Different mode R vs W
         assert tcxy_w0 != tcx1y1_r1
         assert tcxy_w0 != rev_tcxy_w0
 
