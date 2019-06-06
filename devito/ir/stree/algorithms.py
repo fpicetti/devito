@@ -93,6 +93,7 @@ def st_make_halo(stree):
     # Insert the HaloScheme at a suitable level in the ScheduleTree
     mapper = {}
     for k, hs in halo_schemes.items():
+        from IPython import embed; embed()
         for f, v in hs.fmapper.items():
             spot = k
             ancestors = [n for n in k.ancestors if n.is_Iteration]
@@ -104,7 +105,9 @@ def st_make_halo(stree):
                     break
             mapper.setdefault(spot, []).append((f, v))
     for spot, entries in mapper.items():
-        insert(NodeHalo(HaloScheme(fmapper=dict(entries))), spot.parent, [spot])
+        fmappers = [HaloScheme(fmapper=dict([i])) for i in entries]
+        fmapper = fmappers[0].union(fmappers).fmapper
+        insert(NodeHalo(HaloScheme(fmapper=fmapper)), spot.parent, [spot])
 
     return stree
 
