@@ -8,7 +8,6 @@ from devito.tools import Tag, as_tuple, is_integer
 
 __all__ = ['Data']
 
-
 class Data(np.ndarray):
 
     """
@@ -38,7 +37,8 @@ class Data(np.ndarray):
     Data.
     """
 
-    def __new__(cls, shape, dtype, decomposition=None, modulo=None, allocator=ALLOC_FLAT):
+    def __new__(cls, shape, dtype, decomposition=None, modulo=None, allocator=ALLOC_FLAT,
+                distributor=None):
         assert len(shape) == len(modulo)
         ndarray, memfree_args = allocator.alloc(shape, dtype)
         obj = np.asarray(ndarray).view(cls)
@@ -46,6 +46,7 @@ class Data(np.ndarray):
         obj._memfree_args = memfree_args
         obj._decomposition = decomposition or (None,)*len(shape)
         obj._modulo = modulo or (False,)*len(shape)
+        obj._distributor = distributor
 
         # This cannot be a property, as Data objects constructed from this
         # object might not have any `decomposition`, but they would still be
@@ -55,6 +56,7 @@ class Data(np.ndarray):
         # Saves the last index used in `__getitem__`. This allows `__array_finalize__`
         # to reconstruct information about the computed view (e.g., `decomposition`)
         obj._index_stash = None
+        #obj._loc2glb_stash = None
 
         # Sanity check -- A Dimension can't be at the same time modulo-iterated
         # and MPI-distributed
@@ -76,7 +78,9 @@ class Data(np.ndarray):
             # `self` was created through __new__()
             return
 
+        self._distributor = None
         self._index_stash = None
+        #self._loc2glb_stash = None
 
         # Views or references created via operations on `obj` do not get an
         # explicit reference to the underlying data (`_memfree_args`). This makes sure
@@ -91,6 +95,7 @@ class Data(np.ndarray):
         elif obj._index_stash is not None:
             # From `__getitem__`
             self._is_distributed = obj._is_distributed
+            self._distributor = obj._distributor
             glb_idx = obj._normalize_index(obj._index_stash)
             self._modulo = tuple(m for i, m in zip(glb_idx, obj._modulo)
                                  if not is_integer(i))
@@ -103,8 +108,11 @@ class Data(np.ndarray):
                 else:
                     decomposition.append(dec.reshape(i))
             self._decomposition = tuple(decomposition)
+            self._index_stash = obj._index_stash
+            #self._loc2glb_stash = obj._loc2glb_stash
         else:
             self._is_distributed = obj._is_distributed
+            self._distributor = obj._distributor
             if self.ndim == obj.ndim:
                 # E.g., from a ufunc, such as `np.add`
                 self._modulo = obj._modulo
@@ -132,27 +140,36 @@ class Data(np.ndarray):
         ret._is_distributed = any(i is not None for i in decomposition)
         return ret
     
-    def _set_data(self, data, sl1, sl2):
-        data_local = data[sl2]
-        data_loc_idx = self._convert_index(sl2)
+    def _set_data(self, val, sl1, sl2):
+        #data_local = data[sl2]
+        data_loc_idx = val._convert_index(sl2)
         data_global_idx = []
-        for i in range(len(data_loc_idx)):
-            data_global_idx.append(self._decomposition[i].convert_index_global(data_loc_idx[i]))
+        for i in range(len(sl2)):
+            #from IPython import embed; embed()
+            if not val._decomposition[i].loc_empty:
+                data_global_idx.append(val._decomposition[i].convert_index_global(data_loc_idx[i]))
+            else:
+                data_global_idx.append(None)
         # work out bits of sl1 data_global_idx correspond to
         norms = []
         for i, j in zip(sl1, sl2):
             norms.append(i.start-j.start)
         mapped_idx = []
-        for i, j in zip(data_global_idx, norms):
-            mapped_idx.append(slice(i.start+j, i.stop+j, i.step))
         #from IPython import embed; embed()
-        return data_local, as_tuple(mapped_idx)
+        for i, j in zip(data_global_idx, norms):
+            if i is not None:
+                mapped_idx.append(slice(i.start+j, i.stop+j, i.step))
+            else:
+                mapped_idx.append(None)
+        #return data_local, as_tuple(mapped_idx)
+        return as_tuple(mapped_idx)
 
     @property
     def _is_mpi_distributed(self):
         return self._is_distributed and configuration['mpi']
 
     def __repr__(self):
+        print('in repr')
         return super(Data, self._local).__repr__()
 
     def __getitem__(self, glb_idx):
@@ -163,6 +180,18 @@ class Data(np.ndarray):
             return None
         else:
             self._index_stash = glb_idx
+            #loc2glb_idx = []
+
+            #for i in range(len(as_tuple(glb_idx))):
+                #if self._decomposition[i] is not None:
+                    #loc2glb_idx.append(self._decomposition[i].convert_index_global(loc_idx[i]))
+                    ##loc2glb_idx.append(glb_idx[i])
+                #else:
+                    #loc2glb_idx.append(glb_idx[i])
+            ##from IPython import embed; embed()
+
+            #self._loc2glb_stash = as_tuple(loc2glb_idx)
+
             retval = super(Data, self).__getitem__(loc_idx)
             self._index_stash = None
             return retval
@@ -182,7 +211,31 @@ class Data(np.ndarray):
         elif isinstance(val, Data) and val._is_distributed:
             if self._is_distributed:
                 # `val` is decomposed, `self` is decomposed -> local set
-                super(Data, self).__setitem__(glb_idx, val)
+                # FIXME: need to fix the new decomp for RHS's such as f.data[-2:, -2:]
+                val_idx = as_tuple([slice(i.glb_min, i.glb_max+1, 1) for i in val._decomposition])
+                #val_idx = val._convert_index(val_idx)
+                #d, idx = self._set_data(val, loc_idx, val_idx)
+                idx = self._set_data(val, glb_idx, val_idx)
+                comm = self._distributor.comm
+                rank = self._distributor.myrank
+                nprocs = self._distributor.nprocs
+                data_global = [i for i in range(nprocs)]
+                idx_global = [i for i in range(nprocs)]
+                for j in range(4):
+                    data_global[j] = comm.bcast(np.array(val), root=j)
+                    idx_global[j] = comm.bcast(idx, root=j)
+                #from IPython import embed; embed()
+                for j in range(nprocs):
+                    #super(Data, self).__setitem__(glb_idx, val)
+                    skip = any(i is None for i in idx_global[j])
+                    #from IPython import embed; embed()
+                    if not skip:
+                        loc_idx_new = self._convert_index(idx_global[j])
+                        if loc_idx_new is NONLOCAL:
+                            return
+                        else:
+                            #super(Data, self).__setitem__(loc_idx_new, data_global[j])
+                            self.__setitem__(idx_global[j], data_global[j])
             else:
                 #print("We be here?")
                 #from IPython import embed; embed()
