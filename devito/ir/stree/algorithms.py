@@ -93,7 +93,6 @@ def st_make_halo(stree):
     # Insert the HaloScheme at a suitable level in the ScheduleTree
     mapper = {}
     for k, hs in halo_schemes.items():
-        from IPython import embed; embed()
         for f, v in hs.fmapper.items():
             spot = k
             ancestors = [n for n in k.ancestors if n.is_Iteration]
