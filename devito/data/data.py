@@ -8,6 +8,7 @@ from devito.tools import Tag, as_tuple, is_integer
 
 __all__ = ['Data']
 
+
 class Data(np.ndarray):
 
     """
@@ -56,7 +57,6 @@ class Data(np.ndarray):
         # Saves the last index used in `__getitem__`. This allows `__array_finalize__`
         # to reconstruct information about the computed view (e.g., `decomposition`)
         obj._index_stash = None
-        #obj._loc2glb_stash = None
 
         # Sanity check -- A Dimension can't be at the same time modulo-iterated
         # and MPI-distributed
@@ -159,31 +159,38 @@ class Data(np.ndarray):
         else:
             ADVANCED_SLICING = False
 
-        if loc_idx is NONLOCAL:
-            # Caller expects a scalar. However, `glb_idx` doesn't belong to
-            # self's data partition, so None is returned
-            return None
-        elif ADVANCED_SLICING:
+        if ADVANCED_SLICING:
             # Data slicing with a negative step and therefore need to transfer data
             # between ranks
+            # NOTE: Here we may wan't to check if val is empty and remove
+            # ranks with an empty val from rank mat?
             comm = self._distributor.comm
             nprocs = self._distributor.nprocs
             topology = self._distributor.topology
-            global_coords = self._distributor.all_coords
-            loc_coord = self._distributor.mycoords
             rank_mat = np.arange(nprocs).reshape(topology)
-            transform = as_tuple([slice(None, None, np.sign(i.step)) for i in as_tuple(loc_idx)])
+            transform = as_tuple([slice(None, None, np.sign(i.step)) for
+                                  i in as_tuple(loc_idx)])
             rank_comm = rank_mat[transform].reshape(nprocs)
             send_rank = np.where(rank_comm == self._distributor.myrank)[0][0]
-            #from IPython import embed; embed()
+
             self._index_stash = glb_idx
-            sendval = super(Data, self).__getitem__(loc_idx)
-            self._index_stash = None
-            reqs = comm.isend(sendval, dest=send_rank)
+            reqs = comm.isend(super(Data, self).__getitem__(loc_idx), dest=send_rank)
             reqs.wait()
             recval = comm.irecv(source=rank_comm[self._distributor.myrank])
             retval = recval.wait()
+            self._index_stash = None
+
+            # FIXME: Horrid, broken...
+            retval._index_stash = self._index_stash
+            retval._modulo = self._modulo
+            retval._decomposition = self._decomposition
+            retval._distributor = self._distributor
+            retval._is_distributed = self._is_distributed
             return retval
+        elif loc_idx is NONLOCAL:
+            # Caller expects a scalar. However, `glb_idx` doesn't belong to
+            # self's data partition, so None is returned
+            return None
         else:
             self._index_stash = glb_idx
             retval = super(Data, self).__getitem__(loc_idx)
@@ -206,10 +213,10 @@ class Data(np.ndarray):
             if self._is_distributed:
                 # `val` is decomposed, `self` is decomposed -> local set
                 # FIXME: need to fix the new decomp for RHS's such as f.data[-2:, -2:]
-                val_idx = as_tuple([slice(i.glb_min, i.glb_max+1, 1) for i in val._decomposition])
+                val_idx = as_tuple([slice(i.glb_min, i.glb_max+1, 1) for
+                                    i in val._decomposition])
                 idx = self._set_global_idx(val, glb_idx, val_idx)
                 comm = self._distributor.comm
-                rank = self._distributor.myrank
                 nprocs = self._distributor.nprocs
                 # Prepare global lists:
                 data_global = []
@@ -352,7 +359,8 @@ class Data(np.ndarray):
         data_global_idx = []
         for i in range(len(sl2)):
             if not val._decomposition[i].loc_empty:
-                data_global_idx.append(val._decomposition[i].convert_index_global(data_loc_idx[i]))
+                data_global_idx.append(
+                    val._decomposition[i].convert_index_global(data_loc_idx[i]))
             else:
                 data_global_idx.append(None)
         # work out bits of sl1 data_global_idx correspond to
