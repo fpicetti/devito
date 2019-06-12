@@ -80,7 +80,6 @@ class Data(np.ndarray):
 
         self._distributor = None
         self._index_stash = None
-        #self._loc2glb_stash = None
 
         # Views or references created via operations on `obj` do not get an
         # explicit reference to the underlying data (`_memfree_args`). This makes sure
@@ -109,7 +108,6 @@ class Data(np.ndarray):
                     decomposition.append(dec.reshape(i))
             self._decomposition = tuple(decomposition)
             self._index_stash = obj._index_stash
-            #self._loc2glb_stash = obj._loc2glb_stash
         else:
             self._is_distributed = obj._is_distributed
             self._distributor = obj._distributor
@@ -139,59 +137,55 @@ class Data(np.ndarray):
         ret._decomposition = decomposition
         ret._is_distributed = any(i is not None for i in decomposition)
         return ret
-    
-    def _set_data(self, val, sl1, sl2):
-        #data_local = data[sl2]
-        data_loc_idx = val._convert_index(sl2)
-        data_global_idx = []
-        for i in range(len(sl2)):
-            #from IPython import embed; embed()
-            if not val._decomposition[i].loc_empty:
-                data_global_idx.append(val._decomposition[i].convert_index_global(data_loc_idx[i]))
-            else:
-                data_global_idx.append(None)
-        # work out bits of sl1 data_global_idx correspond to
-        norms = []
-        for i, j in zip(sl1, sl2):
-            norms.append(i.start-j.start)
-        mapped_idx = []
-        #from IPython import embed; embed()
-        for i, j in zip(data_global_idx, norms):
-            if i is not None:
-                mapped_idx.append(slice(i.start+j, i.stop+j, i.step))
-            else:
-                mapped_idx.append(None)
-        #return data_local, as_tuple(mapped_idx)
-        return as_tuple(mapped_idx)
 
     @property
     def _is_mpi_distributed(self):
         return self._is_distributed and configuration['mpi']
 
     def __repr__(self):
-        print('in repr')
         return super(Data, self._local).__repr__()
 
     def __getitem__(self, glb_idx):
         loc_idx = self._convert_index(glb_idx)
+
+        # FIXME: Change this horrible code to tag:
+        if self._is_distributed:
+            for i in as_tuple(loc_idx):
+                if isinstance(i, slice) and i.step < 0:
+                    ADVANCED_SLICING = True
+                    break
+                else:
+                    ADVANCED_SLICING = False
+        else:
+            ADVANCED_SLICING = False
+
         if loc_idx is NONLOCAL:
             # Caller expects a scalar. However, `glb_idx` doesn't belong to
             # self's data partition, so None is returned
             return None
+        elif ADVANCED_SLICING:
+            # Data slicing with a negative step and therefore need to transfer data
+            # between ranks
+            comm = self._distributor.comm
+            nprocs = self._distributor.nprocs
+            topology = self._distributor.topology
+            global_coords = self._distributor.all_coords
+            loc_coord = self._distributor.mycoords
+            rank_mat = np.arange(nprocs).reshape(topology)
+            transform = as_tuple([slice(None, None, np.sign(i.step)) for i in as_tuple(loc_idx)])
+            rank_comm = rank_mat[transform].reshape(nprocs)
+            send_rank = np.where(rank_comm == self._distributor.myrank)[0][0]
+            #from IPython import embed; embed()
+            self._index_stash = glb_idx
+            sendval = super(Data, self).__getitem__(loc_idx)
+            self._index_stash = None
+            reqs = comm.isend(sendval, dest=send_rank)
+            reqs.wait()
+            recval = comm.irecv(source=rank_comm[self._distributor.myrank])
+            retval = recval.wait()
+            return retval
         else:
             self._index_stash = glb_idx
-            #loc2glb_idx = []
-
-            #for i in range(len(as_tuple(glb_idx))):
-                #if self._decomposition[i] is not None:
-                    #loc2glb_idx.append(self._decomposition[i].convert_index_global(loc_idx[i]))
-                    ##loc2glb_idx.append(glb_idx[i])
-                #else:
-                    #loc2glb_idx.append(glb_idx[i])
-            ##from IPython import embed; embed()
-
-            #self._loc2glb_stash = as_tuple(loc2glb_idx)
-
             retval = super(Data, self).__getitem__(loc_idx)
             self._index_stash = None
             return retval
@@ -213,32 +207,26 @@ class Data(np.ndarray):
                 # `val` is decomposed, `self` is decomposed -> local set
                 # FIXME: need to fix the new decomp for RHS's such as f.data[-2:, -2:]
                 val_idx = as_tuple([slice(i.glb_min, i.glb_max+1, 1) for i in val._decomposition])
-                #val_idx = val._convert_index(val_idx)
-                #d, idx = self._set_data(val, loc_idx, val_idx)
-                idx = self._set_data(val, glb_idx, val_idx)
+                idx = self._set_global_idx(val, glb_idx, val_idx)
                 comm = self._distributor.comm
                 rank = self._distributor.myrank
                 nprocs = self._distributor.nprocs
-                data_global = [i for i in range(nprocs)]
-                idx_global = [i for i in range(nprocs)]
-                for j in range(4):
-                    data_global[j] = comm.bcast(np.array(val), root=j)
-                    idx_global[j] = comm.bcast(idx, root=j)
-                #from IPython import embed; embed()
+                # Prepare global lists:
+                data_global = []
+                idx_global = []
                 for j in range(nprocs):
-                    #super(Data, self).__setitem__(glb_idx, val)
+                    data_global.append(comm.bcast(np.array(val), root=j))
+                    idx_global.append(comm.bcast(idx, root=j))
+                # Set the data:
+                for j in range(nprocs):
                     skip = any(i is None for i in idx_global[j])
-                    #from IPython import embed; embed()
                     if not skip:
                         loc_idx_new = self._convert_index(idx_global[j])
                         if loc_idx_new is NONLOCAL:
                             return
                         else:
-                            #super(Data, self).__setitem__(loc_idx_new, data_global[j])
                             self.__setitem__(idx_global[j], data_global[j])
             else:
-                #print("We be here?")
-                #from IPython import embed; embed()
                 # `val` is decomposed, `self` is replicated -> gatherall-like
                 raise NotImplementedError
         elif isinstance(val, np.ndarray):
@@ -271,7 +259,6 @@ class Data(np.ndarray):
                                           "via scalars or numpy arrays")
             super(Data, self).__setitem__(glb_idx, val)
         else:
-            #from IPython import embed; embed()
             raise ValueError("Cannot insert obj of type `%s` into a Data" % type(val))
 
     def _normalize_index(self, idx):
@@ -359,6 +346,26 @@ class Data(np.ndarray):
                 loc_idx = [slice(-1, -2) if i is NONLOCAL else i for i in loc_idx]
 
         return loc_idx[0] if len(loc_idx) == 1 else tuple(loc_idx)
+
+    def _set_global_idx(self, val, sl1, sl2):
+        data_loc_idx = val._convert_index(sl2)
+        data_global_idx = []
+        for i in range(len(sl2)):
+            if not val._decomposition[i].loc_empty:
+                data_global_idx.append(val._decomposition[i].convert_index_global(data_loc_idx[i]))
+            else:
+                data_global_idx.append(None)
+        # work out bits of sl1 data_global_idx correspond to
+        norms = []
+        for i, j in zip(sl1, sl2):
+            norms.append(i.start-j.start)
+        mapped_idx = []
+        for i, j in zip(data_global_idx, norms):
+            if i is not None:
+                mapped_idx.append(slice(i.start+j, i.stop+j, i.step))
+            else:
+                mapped_idx.append(None)
+        return as_tuple(mapped_idx)
 
     def reset(self):
         """Set all Data entries to 0."""
