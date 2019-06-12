@@ -168,9 +168,13 @@ class Data(np.ndarray):
             nprocs = self._distributor.nprocs
             topology = self._distributor.topology
             rank_mat = np.arange(nprocs).reshape(topology)
-            transform = as_tuple([slice(None, None, np.sign(i.step)) for
-                                  i in as_tuple(loc_idx)])
-            rank_comm = rank_mat[transform].reshape(nprocs)
+            transform = []
+            for i in as_tuple(loc_idx):
+                if isinstance(i, slice):
+                    transform.append(slice(None, None, np.sign(i.step)))
+                else:
+                    transform.append(i)
+            rank_comm = rank_mat[as_tuple(transform)].reshape(nprocs)
             send_rank = np.where(rank_comm == self._distributor.myrank)[0][0]
 
             self._index_stash = glb_idx
