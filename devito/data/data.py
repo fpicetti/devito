@@ -148,10 +148,10 @@ class Data(np.ndarray):
     def __getitem__(self, glb_idx):
         loc_idx = self._convert_index(glb_idx)
 
-        # FIXME: Change this horrible code to tag:
-        if self._is_distributed:
+        # FIXME: Change this horrible code to a tag:
+        if self._is_mpi_distributed:
             for i in as_tuple(loc_idx):
-                if isinstance(i, slice) and i.step < 0:
+                if isinstance(i, slice) and i.step is not None and i.step < 0:
                     ADVANCED_SLICING = True
                     break
                 else:
@@ -203,6 +203,18 @@ class Data(np.ndarray):
 
     def __setitem__(self, glb_idx, val):
         loc_idx = self._convert_index(glb_idx)
+
+        # FIXME: Change this horrible code to tag:
+        if self._is_mpi_distributed:
+            for i in as_tuple(loc_idx):
+                if isinstance(i, slice) and i.step is not None and i.step < 0:
+                    ADVANCED_SLICING = True
+                    break
+                else:
+                    ADVANCED_SLICING = False
+        else:
+            ADVANCED_SLICING = False
+
         if loc_idx is NONLOCAL:
             # no-op
             return
@@ -214,7 +226,7 @@ class Data(np.ndarray):
             else:
                 super(Data, self).__setitem__(glb_idx, val)
         elif isinstance(val, Data) and val._is_distributed:
-            if self._is_distributed:
+            if ADVANCED_SLICING:
                 # `val` is decomposed, `self` is decomposed -> local set
                 # FIXME: need to fix the new decomp for RHS's such as f.data[-2:, -2:]
                 val_idx = as_tuple([slice(i.glb_min, i.glb_max+1, 1) for
@@ -237,6 +249,9 @@ class Data(np.ndarray):
                             return
                         else:
                             self.__setitem__(idx_global[j], data_global[j])
+            elif self._is_distributed:
+                # `val` is decomposed, `self` is decomposed -> local set
+                super(Data, self).__setitem__(glb_idx, val)
             else:
                 # `val` is decomposed, `self` is replicated -> gatherall-like
                 raise NotImplementedError
@@ -369,8 +384,16 @@ class Data(np.ndarray):
                 data_global_idx.append(None)
         # work out bits of sl1 data_global_idx correspond to
         norms = []
-        for i, j in zip(sl1, sl2):
-            norms.append(i.start-j.start)
+        # FIXME: sl1 and sl2 should probably be normalised prior to this point:
+        # Maybe create an 'as_slice' function?
+        for i, j in zip(as_tuple(sl1), as_tuple(sl2)):
+            if isinstance(i, slice):
+                # Don't need 'norms.append(i.start-j.start)'?
+                norms.append(i.start)
+            elif i is None:
+                norms.append(0)
+            else:
+                norms.append(i)
         mapped_idx = []
         for i, j in zip(data_global_idx, norms):
             if i is not None:

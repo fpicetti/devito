@@ -126,8 +126,9 @@ def test_precomputed_interpolation_time():
     op = Operator(eqn)
     op(time_m=0, time_M=4)
 
+    # NOTE: Work out why this change was needed before any merge
     for it in range(5):
-        assert all(np.isclose(sf.data[it, :], it))
+        assert np.allclose(sf.data[it, :], it)
 
 
 @pytest.mark.parametrize('shape, coords', [
