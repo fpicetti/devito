@@ -162,18 +162,79 @@ class Data(np.ndarray):
         if ADVANCED_SLICING:
             # Data slicing with a negative step and therefore need to transfer data
             # between ranks
+            self._index_stash = glb_idx
+            local_val = super(Data, self).__getitem__(loc_idx)
+            self._index_stash = None
             # NOTE: Here we may wan't to check if val is empty and remove
             # ranks with an empty val from rank mat?
             comm = self._distributor.comm
             nprocs = self._distributor.nprocs
             topology = self._distributor.topology
+            # Produce the rank matrix
             rank_mat = np.arange(nprocs).reshape(topology)
+            # Gather dat structs to see which elements matter
+            dat_struct = []
+            mask = np.zeros(nprocs, dtype=np.int32)
+            for j in range(nprocs):
+                    dat_struct.append(comm.bcast(local_val.shape, root=j))
+                    if any(k == 0 for k in dat_struct[j]):
+                        mask[j] = 1
             transform = []
             for i in as_tuple(loc_idx):
                 if isinstance(i, slice):
                     transform.append(slice(None, None, np.sign(i.step)))
                 else:
                     transform.append(i)
+            transform = as_tuple(transform)
+            m_rank_mat = np.ma.masked_array(rank_mat, mask=mask.reshape(topology))
+            m_rank_mat[None, ~m_rank_mat.mask] = m_rank_mat[None, ~m_rank_mat.mask][transform]
+            m_rank_mat_t = m_rank_mat.reshape(nprocs)
+            ## can we send the data now?
+            #for j in range(len(m_rank_mat_t)):
+                #if not m_rank_mat_t.mask[j]:
+                    #send_from = m_rank_mat_t[j]
+                    ## shape needed = dat_struct[j]
+                    ## form the required slices:
+                    #send_slice = []
+                    #for k in dat_struct[j]:
+                        #send_slice.append(slice(0, k, 1))
+                    #send_slice = as_tuple(send_slice)
+
+                    #send_data = local_val[send_slice]
+
+            dims = len(rank_mat.shape)
+            global_size = []
+            for i in glb_idx:
+                global_size.append(abs(i.start-i.stop))
+            global_size = as_tuple(global_size)
+            tups = np.zeros(global_size, dtype=tuple)
+            it =  np.nditer(tups, flags=['refs_ok', 'multi_index'])
+            while not it.finished:
+                index = it.multi_index
+                tups[index] = index
+                it.iternext()
+            koekf = tups[transform]
+
+            # create the 'rank' slices
+            rank_slice = []
+            for j in dat_struct:
+                this_rank = []
+                for k in j:
+                    this_rank.append(slice(0, k, 1))
+                rank_slice.append(this_rank)
+            # we know how to modify the slices from using m_rank_mat:
+            #rank_slice = rank_slice
+
+            owner_map = np.zeros(global_size, dtype=np.int32)
+            it2 = np.nditer(m_rank_mat, flags=['refs_ok', 'multi_index'])
+            while not it2.finished:
+                index = it.multi_index
+                if m_rank_mat[index].mask:
+                    pass
+                else:
+                    owner_map[rank_slice[some index]] = m_rank_mat[index]
+            #from IPython import embed; embed()
+
             rank_comm = rank_mat[as_tuple(transform)].reshape(nprocs)
             send_rank = np.where(rank_comm == self._distributor.myrank)[0][0]
 
