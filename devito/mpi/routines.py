@@ -552,6 +552,7 @@ class OverlapHaloExchangeBuilder(DiagHaloExchangeBuilder):
         if hs.body.is_Call:
             return None
         else:
+            from IPython import embed; embed()
             return make_efunc('compute%s' % key, hs.body, hs.dimensions)
 
     def _call_compute(self, hs, compute, *args):
@@ -622,8 +623,8 @@ class OverlapHaloExchangeBuilder(DiagHaloExchangeBuilder):
             defleft, defright = callcompute.dynamic_defaults[d]
             dmapper = OrderedDict()
             dmapper[(d, CORE, CENTER)] = (defleft, defright)
-            dmapper[(d, OWNED, LEFT)] = (defleft - left, defleft)
-            dmapper[(d, OWNED, RIGHT)] = (defright, defright - right)
+            dmapper[(d, OWNED, LEFT)] = (defleft - left, defleft - 1)
+            dmapper[(d, OWNED, RIGHT)] = (defright + 1, defright - right)
             mapper.update(dmapper)
             items.append(list(dmapper))
 
