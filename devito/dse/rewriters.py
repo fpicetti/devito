@@ -22,8 +22,7 @@ from devito.tools import flatten, generator
 from devito.types import Array, Scalar
 from devito.types import TimeDimension, SpaceDimension
 
-__all__ = ['BasicRewriter', 'AdvancedRewriter', 'AggressiveRewriter',
-           'SkewingRewriter', 'CustomRewriter']
+__all__ = ['BasicRewriter', 'AdvancedRewriter', 'AggressiveRewriter', 'CustomRewriter']
 
 
 class State(object):
@@ -410,21 +409,6 @@ class AggressiveRewriter(AdvancedRewriter):
         return cluster.rebuild(processed)
 
 
-class SkewingRewriter(AggressiveRewriter):
-
-    def _pipeline(self, state):
-        self._skewing(state)
-        self._extract_sum_of_products(state)
-        self._extract_time_invariants(state, with_cse=False)
-        self._eliminate_inter_stencil_redundancies(state)
-
-        self._extract_sum_of_products(state)
-        self._eliminate_inter_stencil_redundancies(state)
-        self._extract_sum_of_products(state)
-
-        self._factorize(state)
-        self._eliminate_intra_stencil_redundancies(state)
-
     @dse_pass
     def _skewing(self, cluster, template, **kwargs):
         """
@@ -477,7 +461,8 @@ class CustomRewriter(AggressiveRewriter):
         'extract_invariants': AdvancedRewriter._extract_time_invariants,
         'extract_indices': BasicRewriter._extract_nonaffine_indices,
         'extract_increments': BasicRewriter._extract_increments,
-        'opt_transcedentals': BasicRewriter._optimize_trigonometry
+        'opt_transcedentals': BasicRewriter._optimize_trigonometry,
+        'skewing': AggressiveRewriter._skewing
     }
 
     def __init__(self, passes, template=None, profile=True):
